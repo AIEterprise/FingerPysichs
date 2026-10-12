@@ -1,0 +1,6 @@
+{
+  "name": "Zeno's Paradox",
+  "description": "Interactive 3D exploration of Zeno's paradox with multi-scale zoom from fingers to fingerprints, cells, and atoms.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

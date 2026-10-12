@@ -1,0 +1,19 @@
+<resources>
+    <string name="app_name">Zeno\'s Paradox</string>
+    <string name="zeno_subtitle">The Infinite Divide · d → 0</string>
+    <string name="paradox_tagline">Can fingers truly touch?</string>
+    <string name="halve_button">÷ 2 Halve</string>
+    <string name="double_button">× 2 Double</string>
+    <string name="reset_button">Reset (20mm)</string>
+    <string name="tier_macro">Macro Finger</string>
+    <string name="tier_print">Fingerprint</string>
+    <string name="tier_cell">Cellular</string>
+    <string name="tier_atom">Atomic</string>
+    <string name="steps_label">Zeno Steps</string>
+    <string name="gap_distance_label">Gap Distance</string>
+    <string name="scale_order_label">Scale Order</string>
+    <string name="golden_ratio_toggle">φ Grid</string>
+    <string name="hud_toggle">HUD</string>
+    <string name="auto_halve">Auto-Step</string>
+    <string name="stop_auto">Stop</string>
+</resources>

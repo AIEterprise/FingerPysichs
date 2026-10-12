@@ -1,0 +1,19 @@
+<resources>
+    <string name="app_name">ゼノンの逆説</string>
+    <string name="zeno_subtitle">無限分割の逆説 · d → 0</string>
+    <string name="paradox_tagline">指先は本当に触れ合えるのか？</string>
+    <string name="halve_button">÷ 2 半分にする</string>
+    <string name="double_button">× 2 倍にする</string>
+    <string name="reset_button">リセット (20mm)</string>
+    <string name="tier_macro">指先 (巨視)</string>
+    <string name="tier_print">指紋 (紋理)</string>
+    <string name="tier_cell">細胞 (微視)</string>
+    <string name="tier_atom">原子 (量子)</string>
+    <string name="steps_label">二分分割数</string>
+    <string name="gap_distance_label">指先の間隔</string>
+    <string name="scale_order_label">空間スケール</string>
+    <string name="golden_ratio_toggle">黄金比グリッド</string>
+    <string name="hud_toggle">計装表示</string>
+    <string name="auto_halve">連続分割</string>
+    <string name="stop_auto">停止</string>
+</resources>

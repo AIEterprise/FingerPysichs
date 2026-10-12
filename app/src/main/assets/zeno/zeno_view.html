@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Zeno's Paradox 3D</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #0A0A0C;
+      font-family: 'Space Grotesk', -apple-system, sans-serif;
+    }
+    #canvas-container {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+    /* Motion Graphics Rulers & Golden Calipers in overlay */
+    #hud-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .caliper-line {
+      position: absolute;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+    #golden-spiral-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 5;
+      opacity: 0.85;
+      transition: opacity 0.4s ease;
+    }
+  </style>
+  <script src="three.min.js"></script>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  <canvas id="golden-spiral-canvas"></canvas>
+  <div id="hud-overlay"></div>
+
+  <script>
+    // --- ZENO CORE CONSTANTS ---
+    const INITIAL_GAP = 0.020; // 20 mm in meters
+    const MIN_GAP = 1.0e-10;   // 0.1 nm (1 Angstrom, atomic gap)
+    const PHI = 1.6180339887;  // Golden Ratio
+
+    // Scale Tier Boundaries in meters
+    const TIER_MACRO_MIN = 1.0e-3;   // 1 mm
+    const TIER_PRINT_MIN = 3.0e-5;   // 30 um
+    const TIER_CELL_MIN  = 1.0e-8;   // 10 nm
+    // below TIER_CELL_MIN is Atomic Tier (down to 1.0e-10 m)
+
+    let currentGap = INITIAL_GAP;
+    let targetGap = INITIAL_GAP;
+    let zenoStep = 0;
+    let showGoldenRatio = true;
+    let currentLanguage = 'en';
+
+    // Three.js instances
+    let scene, camera, renderer;
+    let container = document.getElementById('canvas-container');
+    let spiralCanvas = document.getElementById('golden-spiral-canvas');
+    let spiralCtx = spiralCanvas.getContext('2d');
+
+    // Groups for scale tiers
+    let macroGroup, printGroup, cellGroup, atomGroup;
+    let indexFingerGroup, thumbFingerGroup;
+    let caliperGroup, particlesGroup;
+
+    // Materials
+    let vectorOutlineMat, vectorFillMat, goldAccentMat, particleMat;
+
+    // Viewport dimensions
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+
+    // Touch gesture state
+    let touchStartDist = 0;
+    let touchStartGap = INITIAL_GAP;
+    let isPinching = false;
+    let orbitAngleX = 0, orbitAngleY = 0;
+    let touchStartX = 0, touchStartY = 0;
+    let isDragging = false;
+
+    function init() {
+      // Scene
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0A0A0C);
+      scene.fog = new THREE.FogExp2(0x0A0A0C, 0.015);
+
+      // Camera
+      camera = new THREE.PerspectiveCamera(45, width / height, 0.001, 100);
+      camera.position.set(0, 0, 18);
+      camera.lookAt(0, 0, 0);
+
+      // Renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(width, height);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.2;
+      container.appendChild(renderer.domElement);
+
+      resizeSpiralCanvas();
+
+      // Lighting
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+      scene.add(ambientLight);
+
+      const dirLight1 = new THREE.DirectionalLight(0xE5A93C, 1.2);
+      dirLight1.position.set(5, 10, 7);
+      scene.add(dirLight1);
+
+      const dirLight2 = new THREE.DirectionalLight(0x88AAFF, 0.8);
+      dirLight2.position.set(-5, -8, -5);
+      scene.add(dirLight2);
+
+      // Initialize groups
+      macroGroup = new THREE.Group();
+      printGroup = new THREE.Group();
+      cellGroup = new THREE.Group();
+      atomGroup = new THREE.Group();
+      caliperGroup = new THREE.Group();
+      particlesGroup = new THREE.Group();
+
+      scene.add(macroGroup);
+      scene.add(printGroup);
+      scene.add(cellGroup);
+      scene.add(atomGroup);
+      scene.add(caliperGroup);
+      scene.add(particlesGroup);
+
+      // Build 3D models for all 4 scales
+      buildMacroFingers();
+      buildFingerprintTier();
+      buildCellularTier();
+      buildAtomicTier();
+      buildCaliperHUD();
+      buildQuantumParticles();
+
+      // Setup Events
+      setupGestures();
+      window.addEventListener('resize', onWindowResize, false);
+
+      // Notify Android initial state
+      notifyScaleChanged();
+
+      animate();
+    }
+
+    // ==========================================
+    // 1. MACRO FINGERS (INDEX FINGER & THUMB)
+    // ==========================================
+    function buildMacroFingers() {
+      indexFingerGroup = new THREE.Group();
+      thumbFingerGroup = new THREE.Group();
+
+      // Stylized anatomical vector finger tip
+      // Index finger pointing down-left toward center (x=0, y=0)
+      const fingerMat = new THREE.MeshStandardMaterial({
+        color: 0x1A1B22,
+        roughness: 0.35,
+        metalness: 0.7,
+        wireframe: false
+      });
+
+      const lineMat = new THREE.LineBasicMaterial({
+        color: 0xF0F4F8,
+        linewidth: 2,
+        transparent: true,
+        opacity: 0.85
+      });
+
+      const goldLineMat = new THREE.LineBasicMaterial({
+        color: 0xE5A93C,
+        linewidth: 2,
+        transparent: true,
+        opacity: 0.95
+      });
+
+      // Construct stylized finger profile
+      function createFingerMesh(isIndex) {
+        const group = new THREE.Group();
+
+        // Finger body using lofted lathe geometry
+        const points = [];
+        points.push(new THREE.Vector2(0.05, 0));
+        points.push(new THREE.Vector2(0.45, 0.3));
+        points.push(new THREE.Vector2(0.85, 0.9));
+        points.push(new THREE.Vector2(1.15, 1.8));
+        points.push(new THREE.Vector2(1.35, 3.0));
+        points.push(new THREE.Vector2(1.40, 5.0));
+
+        const latheGeo = new THREE.LatheGeometry(points, 24);
+        const mesh = new THREE.Mesh(latheGeo, fingerMat);
+        mesh.rotation.z = Math.PI; // point toward center
+        mesh.scale.set(1.1, 1.2, 0.85); // flatten slightly like natural finger tip
+        group.add(mesh);
+
+        // Vector contours
+        const edges = new THREE.EdgesGeometry(latheGeo, 22);
+        const line = new THREE.LineSegments(edges, lineMat);
+        line.rotation.z = Math.PI;
+        line.scale.set(1.102, 1.202, 0.852);
+        group.add(line);
+
+        // Fingernail contour
+        const nailGeo = new THREE.CylinderGeometry(0.7, 0.8, 1.5, 16, 1, true, -Math.PI/3, (2*Math.PI)/3);
+        const nailLine = new THREE.LineSegments(new THREE.EdgesGeometry(nailGeo), goldLineMat);
+        nailLine.position.set(0, 2.2, 0.42);
+        nailLine.rotation.x = Math.PI / 12;
+        group.add(nailLine);
+
+        // Papillary ridge contours at the very contact tip
+        for (let i = 1; i <= 6; i++) {
+          const r = 0.12 * i;
+          const curve = new THREE.EllipseCurve(0, 0, r, r * 0.7, 0, Math.PI * 2, false, 0);
+          const pts = curve.getPoints(32);
+          const ridgeGeo = new THREE.BufferGeometry().setFromPoints(pts.map(p => new THREE.Vector3(p.x, -0.05 - (i * 0.04), p.y)));
+          const ridgeLine = new THREE.Line(ridgeGeo, i % 2 === 0 ? goldLineMat : lineMat);
+          group.add(ridgeLine);
+        }
+
+        return group;
+      }
+
+      // Index finger (approaching from positive X/Y)
+      const indexMesh = createFingerMesh(true);
+      indexMesh.rotation.z = -Math.PI / 2.3;
+      indexFingerGroup.add(indexMesh);
+
+      // Thumb (approaching from negative X/Y)
+      const thumbMesh = createFingerMesh(false);
+      thumbMesh.rotation.z = Math.PI / 1.35;
+      thumbFingerGroup.add(thumbMesh);
+
+      macroGroup.add(indexFingerGroup);
+      macroGroup.add(thumbFingerGroup);
+    }
+
+    // ==========================================
+    // 2. FINGERPRINT RIDGE TIER
+    // ==========================================
+    function buildFingerprintTier() {
+      // Intricate dermatoglyphic loops and epidermal ridges
+      const ridgeGoldMat = new THREE.LineBasicMaterial({ color: 0xE5A93C, transparent: true, opacity: 0.9 });
+      const ridgeCyanMat = new THREE.LineBasicMaterial({ color: 0x90CDF4, transparent: true, opacity: 0.75 });
+      const poreMat = new THREE.PointsMaterial({ color: 0xFFFFFF, size: 0.04, transparent: true, opacity: 0.8 });
+
+      // Generate twin whorl systems for Index and Thumb contact patches
+      function createRidgePatch(isLeft) {
+        const patchGroup = new THREE.Group();
+        const sign = isLeft ? -1 : 1;
+
+        // Arch / Whorl curves
+        for (let r = 0.3; r < 3.2; r += 0.15) {
+          const pts = [];
+          const segments = 48;
+          for (let s = 0; s <= segments; s++) {
+            const angle = (s / segments) * Math.PI - (Math.PI / 2);
+            // Non-linear fingerprint distortion
+            const wobble = Math.sin(angle * 3 + r * 2) * 0.08;
+            const x = sign * (r + wobble) * Math.cos(angle);
+            const y = (r * 0.8 + wobble) * Math.sin(angle);
+            const z = (Math.cos(r) * 0.15);
+            pts.push(new THREE.Vector3(x, y, z));
+          }
+          const geo = new THREE.BufferGeometry().setFromPoints(pts);
+          const line = new THREE.Line(geo, (Math.round(r * 10) % 3 === 0) ? ridgeGoldMat : ridgeCyanMat);
+          patchGroup.add(line);
+        }
+
+        // Sweat pore particles along ridges
+        const porePts = [];
+        for (let p = 0; p < 80; p++) {
+          const pr = 0.5 + Math.random() * 2.2;
+          const pa = (Math.random() - 0.5) * Math.PI * 0.9;
+          porePts.push(new THREE.Vector3(sign * pr * Math.cos(pa), pr * 0.8 * Math.sin(pa), 0.05));
+        }
+        const poreGeo = new THREE.BufferGeometry().setFromPoints(porePts);
+        patchGroup.add(new THREE.Points(poreGeo, poreMat));
+
+        return patchGroup;
+      }
+
+      printGroup.leftPatch = createRidgePatch(true);
+      printGroup.rightPatch = createRidgePatch(false);
+
+      printGroup.add(printGroup.leftPatch);
+      printGroup.add(printGroup.rightPatch);
+      printGroup.visible = false;
+    }
+
+    // ==========================================
+    // 3. CELLULAR TIER (KERATINOCYTES & MEMBRANES)
+    // ==========================================
+    function buildCellularTier() {
+      const cellWallMat = new THREE.LineBasicMaterial({ color: 0x48BB78, transparent: true, opacity: 0.85 });
+      const nucleusMat = new THREE.MeshStandardMaterial({ color: 0xE5A93C, roughness: 0.3, emissive: 0x553C0E });
+      const membraneMat = new THREE.LineBasicMaterial({ color: 0xCBD5E0, transparent: true, opacity: 0.4 });
+
+      function createCellLattice(isLeft) {
+        const latticeGroup = new THREE.Group();
+        const sign = isLeft ? -1 : 1;
+
+        // Hexagonal tessellated skin cells
+        const hexRadius = 0.42;
+        const rows = 5;
+        const cols = 5;
+
+        for (let r = -rows; r <= rows; r++) {
+          for (let c = 0; c <= cols; c++) {
+            const cx = sign * (1.2 + c * hexRadius * 1.6 + (r % 2) * (hexRadius * 0.8));
+            const cy = r * hexRadius * 1.4;
+
+            // Hexagon outline
+            const hexPts = [];
+            for (let i = 0; i <= 6; i++) {
+              const a = (i / 6) * Math.PI * 2;
+              hexPts.push(new THREE.Vector3(cx + hexRadius * Math.cos(a), cy + hexRadius * Math.sin(a), 0));
+            }
+            const hexGeo = new THREE.BufferGeometry().setFromPoints(hexPts);
+            latticeGroup.add(new THREE.Line(hexGeo, cellWallMat));
+
+            // Cell Nucleus with chromatin
+            const nucGeo = new THREE.SphereGeometry(0.12, 12, 12);
+            const nucMesh = new THREE.Mesh(nucGeo, nucleusMat);
+            nucMesh.position.set(cx, cy, 0.05);
+            latticeGroup.add(nucMesh);
+
+            // Double phospholipid membrane rings
+            const ringGeo = new THREE.RingGeometry(hexRadius * 0.75, hexRadius * 0.82, 12);
+            const ringMesh = new THREE.LineSegments(new THREE.EdgesGeometry(ringGeo), membraneMat);
+            ringMesh.position.set(cx, cy, 0.02);
+            latticeGroup.add(ringMesh);
+          }
+        }
+        return latticeGroup;
+      }
+
+      cellGroup.leftCells = createCellLattice(true);
+      cellGroup.rightCells = createCellLattice(false);
+
+      cellGroup.add(cellGroup.leftCells);
+      cellGroup.add(cellGroup.rightCells);
+      cellGroup.visible = false;
+    }
+
+    // ==========================================
+    // 4. ATOMIC TIER (SINGLE BOHR/QUANTUM ATOM)
+    // ==========================================
+    function buildAtomicTier() {
+      // Single atom in the center of the gap between the approaching atomic tips
+      const atomCenterGroup = new THREE.Group();
+
+      // Glowing multi-nucleon core (Protons & Neutrons)
+      const protonMat = new THREE.MeshStandardMaterial({
+        color: 0xE5A93C,
+        emissive: 0x975A16,
+        roughness: 0.2
+      });
+      const neutronMat = new THREE.MeshStandardMaterial({
+        color: 0xF7FAFC,
+        emissive: 0x718096,
+        roughness: 0.2
+      });
+
+      const coreGroup = new THREE.Group();
+      const numNucleons = 14;
+      for (let i = 0; i < numNucleons; i++) {
+        const isProton = (i % 2 === 0);
+        const nucMesh = new THREE.Mesh(new THREE.SphereGeometry(0.14, 16, 16), isProton ? protonMat : neutronMat);
+        const phi = Math.acos(-1 + (2 * i) / numNucleons);
+        const theta = Math.sqrt(numNucleons * Math.PI) * phi;
+        const rad = 0.24;
+        nucMesh.position.set(
+          rad * Math.cos(theta) * Math.sin(phi),
+          rad * Math.sin(theta) * Math.sin(phi),
+          rad * Math.cos(phi)
+        );
+        coreGroup.add(nucMesh);
+      }
+      atomCenterGroup.add(coreGroup);
+      atomCenterGroup.core = coreGroup;
+
+      // Electron Orbital Rings (Bohr orbits + probability cloud)
+      atomCenterGroup.orbitals = [];
+      const orbitalRadii = [1.1, 1.9, 2.8, 3.8];
+      const orbitLineMat = new THREE.LineBasicMaterial({ color: 0x63B3ED, transparent: true, opacity: 0.7 });
+
+      orbitalRadii.forEach((rad, idx) => {
+        const orbitGroup = new THREE.Group();
+
+        // Orbit ring
+        const circlePts = [];
+        for (let i = 0; i <= 64; i++) {
+          const a = (i / 64) * Math.PI * 2;
+          circlePts.push(new THREE.Vector3(rad * Math.cos(a), rad * Math.sin(a), 0));
+        }
+        const circleGeo = new THREE.BufferGeometry().setFromPoints(circlePts);
+        orbitGroup.add(new THREE.Line(circleGeo, orbitLineMat));
+
+        // Orbiting electron sphere
+        const electronMat = new THREE.MeshStandardMaterial({ color: 0x63B3ED, emissive: 0x3182CE });
+        const electronMesh = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), electronMat);
+        electronMesh.position.set(rad, 0, 0);
+        orbitGroup.add(electronMesh);
+        orbitGroup.electron = electronMesh;
+        orbitGroup.radius = rad;
+        orbitGroup.speed = 1.8 / (idx + 1);
+
+        // Tilt each orbital in 3D space
+        orbitGroup.rotation.x = (idx * Math.PI) / 3;
+        orbitGroup.rotation.y = (idx * Math.PI) / 4;
+
+        atomCenterGroup.add(orbitGroup);
+        atomCenterGroup.orbitals.push(orbitGroup);
+      });
+
+      // Quantum Wave Function Cloud (1200 probability particles)
+      const cloudGeo = new THREE.BufferGeometry();
+      const cloudPts = [];
+      for (let i = 0; i < 1200; i++) {
+        const u = Math.random();
+        const dist = 0.6 + Math.pow(u, 1.8) * 3.5;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        cloudPts.push(
+          dist * Math.sin(phi) * Math.cos(theta),
+          dist * Math.sin(phi) * Math.sin(theta),
+          dist * Math.cos(phi)
+        );
+      }
+      cloudGeo.setAttribute('position', new THREE.Float32BufferAttribute(cloudPts, 3));
+      const cloudMat = new THREE.PointsMaterial({
+        color: 0xE5A93C,
+        size: 0.035,
+        transparent: true,
+        opacity: 0.65,
+        blending: THREE.AdditiveBlending
+      });
+      const cloudPoints = new THREE.Points(cloudGeo, cloudMat);
+      atomCenterGroup.add(cloudPoints);
+      atomCenterGroup.cloud = cloudPoints;
+
+      // Two grasping atomic tip planes (Left tip & Right tip)
+      const tipMat = new THREE.LineBasicMaterial({ color: 0xF7FAFC, transparent: true, opacity: 0.8 });
+      function createAtomicLattice(isLeft) {
+        const tipGroup = new THREE.Group();
+        const sign = isLeft ? -1 : 1;
+        const pts = [];
+        for (let y = -3; y <= 3; y += 0.5) {
+          pts.push(new THREE.Vector3(sign * 2.5, y, -2));
+          pts.push(new THREE.Vector3(sign * 2.5, y, 2));
+        }
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        tipGroup.add(new THREE.LineSegments(geo, tipMat));
+        return tipGroup;
+      }
+
+      atomGroup.leftTip = createAtomicLattice(true);
+      atomGroup.rightTip = createAtomicLattice(false);
+      atomGroup.atomCenter = atomCenterGroup;
+
+      atomGroup.add(atomGroup.leftTip);
+      atomGroup.add(atomGroup.rightTip);
+      atomGroup.add(atomGroup.atomCenter);
+      atomGroup.visible = false;
+    }
+
+    // ==========================================
+    // 5. CALIPER HUD & KINETIC PARTICLES
+    // ==========================================
+    function buildCaliperHUD() {
+      const caliperMat = new THREE.LineBasicMaterial({ color: 0xE5A93C, linewidth: 2, transparent: true, opacity: 0.9 });
+
+      // Caliper top tick & bottom tick
+      const caliperGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(-1, 2.2, 0), new THREE.Vector3(1, 2.2, 0),
+        new THREE.Vector3(-1, 2.0, 0), new THREE.Vector3(-1, 2.4, 0),
+        new THREE.Vector3(1, 2.0, 0), new THREE.Vector3(1, 2.4, 0),
+        new THREE.Vector3(0, 1.8, 0), new THREE.Vector3(0, 2.6, 0)
+      ]);
+      caliperGroup.caliperMesh = new THREE.LineSegments(caliperGeo, caliperMat);
+      caliperGroup.add(caliperGroup.caliperMesh);
+    }
+
+    function buildQuantumParticles() {
+      // Kinetic flux particles floating between the narrowing gap
+      const particleGeo = new THREE.BufferGeometry();
+      const pCount = 300;
+      const positions = new Float32Array(pCount * 3);
+      for (let i = 0; i < pCount; i++) {
+        positions[i * 3]     = (Math.random() - 0.5) * 4;
+        positions[i * 3 + 1] = (Math.random() - 0.5) * 4;
+        positions[i * 3 + 2] = (Math.random() - 0.5) * 2;
+      }
+      particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const pMat = new THREE.PointsMaterial({
+        color: 0xE5A93C,
+        size: 0.04,
+        transparent: true,
+        opacity: 0.5,
+        blending: THREE.AdditiveBlending
+      });
+      particlesGroup.points = new THREE.Points(particleGeo, pMat);
+      particlesGroup.add(particlesGroup.points);
+    }
+
+    // ==========================================
+    // GOLDEN RATIO SPIRAL 2D OVERLAY CANVAS
+    // ==========================================
+    function resizeSpiralCanvas() {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      spiralCanvas.width = width * window.devicePixelRatio;
+      spiralCanvas.height = height * window.devicePixelRatio;
+      spiralCanvas.style.width = width + 'px';
+      spiralCanvas.style.height = height + 'px';
+      spiralCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    }
+
+    function drawGoldenSpiral() {
+      spiralCtx.clearRect(0, 0, width, height);
+      if (!showGoldenRatio) return;
+
+      const cx = width / 2;
+      const cy = height / 2;
+
+      // Golden ratio logarithmic spiral: r = a * e^(b * theta)
+      // b = ln(phi) / (pi / 2) ≈ 0.3063
+      const b = Math.log(PHI) / (Math.PI / 2);
+      const a = 4.0;
+
+      spiralCtx.save();
+      spiralCtx.strokeStyle = 'rgba(229, 169, 60, 0.45)';
+      spiralCtx.lineWidth = 1.2;
+      spiralCtx.beginPath();
+
+      const maxTheta = 7 * Math.PI;
+      for (let theta = 0; theta <= maxTheta; theta += 0.05) {
+        const r = a * Math.exp(b * theta);
+        if (r > Math.max(width, height)) break;
+        const x = cx + r * Math.cos(theta + orbitAngleY * 0.5);
+        const y = cy + r * Math.sin(theta + orbitAngleY * 0.5);
+        if (theta === 0) spiralCtx.moveTo(x, y);
+        else spiralCtx.lineTo(x, y);
+      }
+      spiralCtx.stroke();
+
+      // Golden rectangle subdivisions
+      spiralCtx.strokeStyle = 'rgba(240, 244, 248, 0.12)';
+      spiralCtx.setLineDash([4, 4]);
+      const rectW = Math.min(width * 0.85, 420);
+      const rectH = rectW / PHI;
+      spiralCtx.strokeRect(cx - rectW / 2, cy - rectH / 2, rectW, rectH);
+
+      // Caliper bisector line
+      spiralCtx.strokeStyle = 'rgba(229, 169, 60, 0.7)';
+      spiralCtx.setLineDash([]);
+      spiralCtx.beginPath();
+      spiralCtx.moveTo(cx, cy - 30);
+      spiralCtx.lineTo(cx, cy + 30);
+      spiralCtx.stroke();
+
+      spiralCtx.restore();
+    }
+
+    // ==========================================
+    // MULTI-SCALE MORPHING & GAP CONTROL
+    // ==========================================
+    function updateScaleMorphing() {
+      // Smooth interpolation toward targetGap
+      currentGap += (targetGap - currentGap) * 0.12;
+
+      // Logarithmic exponent: 10^-2 m (macro 20mm) down to 10^-10 m (atom 0.1nm)
+      const logVal = Math.log10(currentGap); // -2 to -10
+      // Normalize progress from 0 (macro) to 1 (atom)
+      const t = Math.max(0, Math.min(1, (-2 - logVal) / 8));
+
+      // 1. MACRO FINGERS: visible when gap > 1.0e-3
+      // The finger positions are directly coupled to currentGap
+      const visualGap = Math.max(0.12, currentGap * 120); // in 3D units
+      indexFingerGroup.position.set(visualGap / 2, visualGap * 0.4, 0);
+      thumbFingerGroup.position.set(-visualGap / 2, -visualGap * 0.4, 0);
+
+      // Fade out macro fingers as we enter microscopic scales
+      const macroAlpha = Math.max(0, Math.min(1, (logVal - (-4)) / 1.5));
+      macroGroup.visible = macroAlpha > 0.01;
+      if (macroGroup.visible) {
+        macroGroup.scale.setScalar(Math.max(0.8, 1 + t * 2));
+      }
+
+      // 2. FINGERPRINT TIER: visible between 10^-3 and 10^-5
+      const printAlpha = Math.max(0, Math.min(1, 1 - Math.abs(logVal - (-3.8)) / 1.5));
+      printGroup.visible = printAlpha > 0.01;
+      if (printGroup.visible) {
+        const pGap = Math.max(0.08, (currentGap / 1.0e-3) * 1.5);
+        printGroup.leftPatch.position.x = -pGap;
+        printGroup.rightPatch.position.x = pGap;
+      }
+
+      // 3. CELLULAR TIER: visible between 10^-5 and 10^-8
+      const cellAlpha = Math.max(0, Math.min(1, 1 - Math.abs(logVal - (-6.2)) / 1.6));
+      cellGroup.visible = cellAlpha > 0.01;
+      if (cellGroup.visible) {
+        const cGap = Math.max(0.06, (currentGap / 1.0e-5) * 1.8);
+        cellGroup.leftCells.position.x = -cGap;
+        cellGroup.rightCells.position.x = cGap;
+      }
+
+      // 4. ATOMIC TIER: visible when gap < 10^-7
+      const atomAlpha = Math.max(0, Math.min(1, (-7 - logVal) / 1.8));
+      atomGroup.visible = atomAlpha > 0.01;
+      if (atomGroup.visible) {
+        const aGap = Math.max(1.8, (currentGap / 1.0e-9) * 2.2);
+        atomGroup.leftTip.position.x = -aGap;
+        atomGroup.rightTip.position.x = aGap;
+
+        // Animate atom orbitals
+        if (atomGroup.atomCenter) {
+          atomGroup.atomCenter.core.rotation.y += 0.01;
+          atomGroup.atomCenter.core.rotation.x += 0.007;
+          atomGroup.atomCenter.orbitals.forEach(orb => {
+            orb.rotation.z += orb.speed * 0.03;
+          });
+          if (atomGroup.atomCenter.cloud) {
+            atomGroup.atomCenter.cloud.rotation.y += 0.005;
+          }
+        }
+      }
+
+      // Caliper update
+      if (caliperGroup.caliperMesh) {
+        const cWidth = Math.max(0.2, visualGap);
+        caliperGroup.caliperMesh.scale.x = cWidth;
+      }
+    }
+
+    // ==========================================
+    // TOUCH GESTURES (PINCH & ORBIT)
+    // ==========================================
+    function setupGestures() {
+      window.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) {
+          isPinching = true;
+          isDragging = false;
+          touchStartDist = getTouchDist(e.touches);
+          touchStartGap = targetGap;
+        } else if (e.touches.length === 1) {
+          isDragging = true;
+          touchStartX = e.touches[0].clientX;
+          touchStartY = e.touches[0].clientY;
+        }
+      }, { passive: true });
+
+      window.addEventListener('touchmove', (e) => {
+        if (isPinching && e.touches.length === 2) {
+          const dist = getTouchDist(e.touches);
+          const ratio = dist / touchStartDist;
+          // Pinch-out expands gap, pinch-in narrows gap
+          let newGap = touchStartGap * Math.pow(ratio, 2.5);
+          newGap = Math.max(MIN_GAP, Math.min(INITIAL_GAP * 1.5, newGap));
+          targetGap = newGap;
+          notifyScaleChanged();
+        } else if (isDragging && e.touches.length === 1) {
+          const dx = e.touches[0].clientX - touchStartX;
+          const dy = e.touches[0].clientY - touchStartY;
+          touchStartX = e.touches[0].clientX;
+          touchStartY = e.touches[0].clientY;
+
+          orbitAngleY += dx * 0.005;
+          orbitAngleX += dy * 0.005;
+          orbitAngleX = Math.max(-0.6, Math.min(0.6, orbitAngleX));
+
+          scene.rotation.y = orbitAngleY;
+          scene.rotation.x = orbitAngleX;
+        }
+      }, { passive: true });
+
+      window.addEventListener('touchend', (e) => {
+        if (e.touches.length < 2) isPinching = false;
+        if (e.touches.length === 0) isDragging = false;
+      }, { passive: true });
+    }
+
+    function getTouchDist(touches) {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function onWindowResize() {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+      resizeSpiralCanvas();
+    }
+
+    // ==========================================
+    // PUBLIC API FOR ANDROID BRIDGE
+    // ==========================================
+    window.setGap = function(meters) {
+      targetGap = Math.max(MIN_GAP, Math.min(INITIAL_GAP * 2, meters));
+      notifyScaleChanged();
+    };
+
+    window.halveGap = function() {
+      zenoStep++;
+      targetGap = Math.max(MIN_GAP, targetGap / 2);
+      notifyScaleChanged();
+    };
+
+    window.doubleGap = function() {
+      if (zenoStep > 0) zenoStep--;
+      targetGap = Math.min(INITIAL_GAP, targetGap * 2);
+      notifyScaleChanged();
+    };
+
+    window.resetGap = function() {
+      zenoStep = 0;
+      targetGap = INITIAL_GAP;
+      orbitAngleX = 0;
+      orbitAngleY = 0;
+      scene.rotation.set(0, 0, 0);
+      notifyScaleChanged();
+    };
+
+    window.jumpToTier = function(tier) {
+      switch(tier) {
+        case 'macro':  targetGap = 0.015; zenoStep = 1; break;
+        case 'print':  targetGap = 3.0e-4; zenoStep = 6; break;
+        case 'cell':   targetGap = 5.0e-6; zenoStep = 12; break;
+        case 'atom':   targetGap = 2.0e-10; zenoStep = 27; break;
+      }
+      notifyScaleChanged();
+    };
+
+    window.setGoldenRatioVisible = function(visible) {
+      showGoldenRatio = visible;
+      drawGoldenSpiral();
+    };
+
+    window.setLanguage = function(lang) {
+      currentLanguage = lang;
+      notifyScaleChanged();
+    };
+
+    function notifyScaleChanged() {
+      // Determine active tier index (0: macro, 1: print, 2: cell, 3: atom)
+      let tierIndex = 0;
+      if (targetGap > TIER_MACRO_MIN) tierIndex = 0;
+      else if (targetGap > TIER_PRINT_MIN) tierIndex = 1;
+      else if (targetGap > TIER_CELL_MIN) tierIndex = 2;
+      else tierIndex = 3;
+
+      if (window.AndroidBridge && window.AndroidBridge.onScaleChanged) {
+        window.AndroidBridge.onScaleChanged(targetGap, zenoStep, tierIndex);
+      }
+    }
+
+    // ==========================================
+    // RENDER LOOP
+    // ==========================================
+    let clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+
+      updateScaleMorphing();
+
+      // Kinetic particle drift
+      if (particlesGroup.points) {
+        particlesGroup.points.rotation.y += 0.003;
+      }
+
+      renderer.render(scene, camera);
+      drawGoldenSpiral();
+    }
+
+    // Start everything
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
